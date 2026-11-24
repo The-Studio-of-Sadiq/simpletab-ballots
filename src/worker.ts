@@ -58,6 +58,17 @@ export async function handleRequest(
       return errorResponse("NOT_FOUND", "Registration is planned for M10");
     }
 
+    if ((method === "GET" || method === "HEAD") && env.ASSETS) {
+      if (pathname === "/t" || pathname.startsWith("/t/")) {
+        const indexUrl = new URL("/index.html", url.origin);
+        return await env.ASSETS.fetch(new Request(indexUrl.toString(), request));
+      }
+      const assetResponse = await env.ASSETS.fetch(request);
+      if (assetResponse.status !== 404) {
+        return assetResponse;
+      }
+    }
+
     return errorResponse("NOT_FOUND", `Route not found: ${method} ${pathname}`);
   } catch {
     return errorResponse("INTERNAL", "Internal server error");

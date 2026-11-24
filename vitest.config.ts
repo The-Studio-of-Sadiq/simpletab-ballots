@@ -10,24 +10,48 @@ export default defineConfig(async () => {
   const migrations = await readD1Migrations(path.resolve(__dirname, "migrations"));
 
   return {
-    resolve: {
-      alias: {
-        "@": coreSrcPath,
-        "@simpletab/core": coreSrcPath,
-      },
-    },
-    plugins: [
-      cloudflareTest({
-        wrangler: {
-          configPath: "./wrangler.toml",
-        },
-        miniflare: {
-          compatibilityDate: "2026-08-22",
-          bindings: {
-            TEST_MIGRATIONS: migrations,
+    test: {
+      projects: [
+        {
+          resolve: {
+            alias: {
+              "@": coreSrcPath,
+              "@simpletab/core": coreSrcPath,
+            },
+          },
+          plugins: [
+            cloudflareTest({
+              wrangler: {
+                configPath: "./wrangler.toml",
+              },
+              miniflare: {
+                compatibilityDate: "2026-08-22",
+                bindings: {
+                  TEST_MIGRATIONS: migrations,
+                },
+              },
+            }),
+          ],
+          test: {
+            name: "worker",
+            include: ["test/**/*.test.ts"],
           },
         },
-      }),
-    ],
+        {
+          resolve: {
+            alias: {
+              "@": coreSrcPath,
+              "@simpletab/core": coreSrcPath,
+            },
+          },
+          test: {
+            name: "app",
+            environment: "jsdom",
+            setupFiles: ["app/test/setup.ts"],
+            include: ["app/test/**/*.test.ts"],
+          },
+        },
+      ],
+    },
   };
 });

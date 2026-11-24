@@ -23,10 +23,22 @@ npm run dev
 Verification commands:
 
 ```bash
+npm run app:build
+npm run app:size
 npm run typecheck
 npm test
+npm run i18n:check
 npx wrangler deploy --dry-run --outdir dist
 ```
+
+## Participant phone web app (`app/`)
+
+The participant portal is a framework-free TypeScript PWA built with `esbuild` into `app/dist/` and wired as Workers Static Assets in `wrangler.toml` (`[assets]`, `run_worker_first = ["/v1/*", "/admin/*"]`).
+
+- **Build & size check:** `npm run app:build` bundles `app/src/main.ts` and `app/src/sw.ts` into `app/dist/`; `npm run app:size` verifies total gzipped JS stays under 100 KB.
+- **Local dev:** `npm run app:dev` builds and serves `app/dist/` locally on `http://127.0.0.1:8788`.
+- **i18n:** `app/locales/{en,bn,TEMPLATE}/app.json` use ICU MessageFormat (`intl-messageformat`); `npm run i18n:check` verifies key parity and ICU syntax.
+- **CDN manifest contract:** `app/src/manifest.ts` defines `TournamentManifest`, `RoundManifestEntry`, `FormsFile`, and `MotionsFile` produced by the host publisher.
 
 ## Admin access (Cloudflare Access)
 

@@ -10,16 +10,25 @@
   "scripts": {
     "dev": "wrangler dev",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p app/tsconfig.json --noEmit",
     "deploy": "wrangler deploy",
-    "d1:migrate:local": "wrangler d1 migrations apply simpletab-ballots --local"
+    "d1:migrate:local": "wrangler d1 migrations apply simpletab-ballots --local",
+    "app:build": "node scripts/build-app.mjs",
+    "app:dev": "node scripts/dev-app.mjs",
+    "app:size": "node scripts/app-size.mjs",
+    "i18n:check": "node scripts/i18n-check.mjs"
   },
   "dependencies": {
-    "@simpletab/core": "file:../simpletab/packages/core"
+    "@simpletab/core": "file:../simpletab/packages/core",
+    "intl-messageformat": "12.2.0",
+    "qrcode-generator": "2.0.4"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.23.0",
     "@cloudflare/workers-types": "5.20261119.1",
+    "esbuild": "0.28.1",
+    "fake-indexeddb": "6.2.8",
+    "jsdom": "26.1.0",
     "typescript": "5.9.3",
     "vitest": "4.1.12",
     "wrangler": "4.165.0"

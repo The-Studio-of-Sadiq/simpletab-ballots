@@ -11,6 +11,7 @@ export interface Env {
   ARCHIVE: R2Bucket;
   RL_LINK: RateLimiterBinding;
   RL_IP: RateLimiterBinding;
+  ASSETS?: Fetcher;
 }
 
 export type Clock = () => number;
