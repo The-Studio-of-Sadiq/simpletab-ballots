@@ -211,6 +211,32 @@ describe("Host authentication, host-number rules, permits, inbox, ack, head, clo
     expect(page2Parsed.value.items.map((i) => i.submissionId)).toEqual([id3]);
     expect(page2Parsed.value.next).toBeNull();
 
+    // `scanned`: a full page stops at its last item; a final page covers the whole table.
+    expect(page1Parsed.value.scanned).toBe(page1Parsed.value.items[1].rowid);
+    const tableMax = await typedEnv.DB.prepare("SELECT MAX(rowid) AS hi FROM submissions").first<{
+      hi: number;
+    }>();
+    expect(page2Parsed.value.scanned).toBe(tableMax?.hi);
+
+    // The other tournament's quiet pull from 0 gets its one item and may skip past ours.
+    const otherResp = await SELF.fetch("https://ballots.test/v1/host/inbox?after=0", {
+      headers: hostHeaders(otherApproved.key),
+    });
+    const otherParsed = parseInboxPage(await otherResp.json());
+    expect(otherParsed.ok).toBe(true);
+    if (!otherParsed.ok) {
+      throw new Error("Expected valid InboxPage");
+    }
+    expect(otherParsed.value.items.map((i) => i.submissionId)).toEqual([idOther]);
+    expect(otherParsed.value.scanned).toBe(tableMax?.hi);
+    const quietResp = await SELF.fetch(
+      `https://ballots.test/v1/host/inbox?after=${otherParsed.value.scanned}`,
+      { headers: hostHeaders(otherApproved.key) },
+    );
+    const quietParsed = parseInboxPage(await quietResp.json());
+    expect(quietParsed.ok && quietParsed.value.items.length === 0).toBe(true);
+    expect(quietParsed.ok ? quietParsed.value.scanned : -1).toBe(tableMax?.hi);
+
     // Ack through page1.items[1].rowid; a smaller ack must not lower acked_through.
     const ackHigh = await SELF.fetch("https://ballots.test/v1/host/ack", {
       method: "POST",

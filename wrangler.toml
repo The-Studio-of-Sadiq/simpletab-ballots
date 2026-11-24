@@ -29,7 +29,7 @@ limit = 20
 period = 60
 
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["*/10 * * * *"]
 
 [alias]
 "@" = "../simpletab/packages/core/src"

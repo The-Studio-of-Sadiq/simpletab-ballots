@@ -35,6 +35,33 @@ export default defineConfig(async () => {
           test: {
             name: "worker",
             include: ["test/**/*.test.ts"],
+            exclude: ["test/budget/**"],
+          },
+        },
+        {
+          resolve: {
+            alias: {
+              "@": coreSrcPath,
+              "@simpletab/core": coreSrcPath,
+            },
+          },
+          plugins: [
+            cloudflareTest({
+              wrangler: {
+                configPath: "./wrangler.toml",
+              },
+              miniflare: {
+                compatibilityDate: "2026-08-22",
+                bindings: {
+                  TEST_MIGRATIONS: migrations,
+                },
+              },
+            }),
+          ],
+          test: {
+            name: "budget",
+            include: ["test/budget/**/*.budget.test.ts"],
+            testTimeout: 300_000,
           },
         },
         {

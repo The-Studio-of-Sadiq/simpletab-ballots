@@ -12,7 +12,12 @@ export type TournamentStatus =
   | "paused"
   | "revoked"
   | "closed"
+  | "archiving"
   | "archived";
+
+export function isClosedStatus(status: TournamentStatus): boolean {
+  return status === "closed" || status === "archiving" || status === "archived";
+}
 
 export interface TournamentRow {
   slug: string;
@@ -28,6 +33,7 @@ export interface TournamentRow {
   reg_open: string | null;
   reg_close: string | null;
   reg_cap: number | null;
+  closed_at: string | null;
   created_at: string;
 }
 
@@ -87,7 +93,7 @@ export async function authenticateTournamentKey(
     .prepare(
       `SELECT slug, key_hash, host_number, host_id, host_rank, status,
               share_requests, share_writes, cdn_origin, acked_through,
-              reg_open, reg_close, reg_cap, created_at
+              reg_open, reg_close, reg_cap, closed_at, created_at
        FROM tournaments
        WHERE key_hash = ?`,
     )
@@ -173,6 +179,10 @@ export async function authenticateHost(
   }
 
   const tournament = keyResult.tournament;
+  if (isClosedStatus(tournament.status)) {
+    return { ok: true, hostUpdated: false, tournament };
+  }
+
   const storedNumber = tournament.host_number;
   const storedHostId = tournament.host_id;
   const storedRank = tournament.host_rank;

@@ -32,9 +32,25 @@ export function makeUlid(seed?: number): string {
   return chars.join("");
 }
 
+export async function resetArchiveBucket(): Promise<void> {
+  let cursor: string | undefined;
+  while (true) {
+    const listing = await typedEnv.ARCHIVE.list({ cursor, limit: 1000 });
+    if (listing.objects.length > 0) {
+      await typedEnv.ARCHIVE.delete(listing.objects.map((obj) => obj.key));
+    }
+    if (!listing.truncated) {
+      break;
+    }
+    cursor = listing.cursor;
+  }
+}
+
 export async function resetDatabase(): Promise<void> {
   await applyD1Migrations(typedEnv.DB, typedEnv.TEST_MIGRATIONS);
   await typedEnv.DB.batch([
+    typedEnv.DB.prepare("DELETE FROM archive_parts"),
+    typedEnv.DB.prepare("DELETE FROM archive_jobs"),
     typedEnv.DB.prepare("DELETE FROM submissions"),
     typedEnv.DB.prepare("DELETE FROM permits"),
     typedEnv.DB.prepare("DELETE FROM heads"),

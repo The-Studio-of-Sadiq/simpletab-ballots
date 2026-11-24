@@ -11,6 +11,7 @@ import type { Clock, Env } from "../env";
 import {
   authenticateHost,
   getCachedIdempotentResponse,
+  isClosedStatus,
   storeIdempotentResponse,
 } from "../lib/auth";
 import { errorResponse, jsonResponse, readJsonBody, wireParseErrorResponse } from "../lib/errors";
@@ -21,7 +22,6 @@ const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const NON_NEGATIVE_INT_RE = /^(?:0|[1-9]\d*)$/;
 const POSITIVE_INT_RE = /^[1-9]\d*$/;
 const MAX_INBOX_LIMIT = 500;
-const INBOX_SCAN_BATCH = 2000;
 
 interface SubmissionInboxRow {
   rowid: number;
@@ -105,7 +105,7 @@ export async function handleHostPermits(
     return cached;
   }
 
-  if (auth.tournament.status === "closed" || auth.tournament.status === "archived") {
+  if (isClosedStatus(auth.tournament.status)) {
     return errorResponse("ROUND_CLOSED", "Tournament is closed");
   }
 
@@ -174,6 +174,10 @@ export async function handleHostInbox(
     return auth.response;
   }
 
+  if (isClosedStatus(auth.tournament.status)) {
+    return errorResponse("ROUND_CLOSED", "Tournament is closed");
+  }
+
   const rawAfter = url.searchParams.get("after");
   let after = 0;
   if (rawAfter !== null && rawAfter.trim().length > 0) {
@@ -199,69 +203,59 @@ export async function handleHostInbox(
     limit = Math.min(parsedLimit, MAX_INBOX_LIMIT);
   }
 
+  // No (slug, rowid) index (it would cost one more written row per submission, design section 13).
+  // SQLite walks the rowid range and filters by slug itself, so only this tournament's rows reach
+  // the Worker (CPU limit). `scanned` tells the host where the next pull can start, so quiet pulls
+  // do not re-read other tournaments' rows (D1 rows-read limit).
+  const maxRow = await env.DB.prepare("SELECT MAX(rowid) AS hi FROM submissions").first<{
+    hi: number | null;
+  }>();
+  const hi = Math.max(after, maxRow?.hi ?? 0);
+
+  const rowsResult = await env.DB.prepare(
+    `SELECT rowid, submission_id, slug, round_id, lookup_id, type, payload, received_at
+     FROM submissions
+     WHERE rowid > ? AND rowid <= ? AND slug = ?
+     ORDER BY rowid ASC
+     LIMIT ?`,
+  )
+    .bind(after, hi, auth.tournament.slug, limit + 1)
+    .all<SubmissionInboxRow>();
+
+  const rows = rowsResult.results;
+  const hasMore = rows.length > limit;
   const matched: InboxItem[] = [];
-  let cursor = after;
-  let hasMore = false;
-
-  // Scan globally by rowid without a (slug, rowid) index to avoid an extra D1 index write per submission.
-  while (matched.length <= limit) {
-    const batchResult = await env.DB.prepare(
-      `SELECT rowid, submission_id, slug, round_id, lookup_id, type, payload, received_at
-       FROM submissions
-       WHERE rowid > ?
-       ORDER BY rowid ASC
-       LIMIT ?`,
-    )
-      .bind(cursor, INBOX_SCAN_BATCH)
-      .all<SubmissionInboxRow>();
-
-    const rows = batchResult.results;
-    if (rows.length === 0) {
-      break;
-    }
-
-    for (const row of rows) {
-      cursor = row.rowid;
-      if (row.slug !== auth.tournament.slug) {
-        continue;
+  for (const row of hasMore ? rows.slice(0, limit) : rows) {
+    let parsedPayload: Record<string, unknown> = {};
+    try {
+      const raw: unknown = JSON.parse(row.payload);
+      if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+        parsedPayload = raw as Record<string, unknown>;
       }
-
-      if (matched.length === limit) {
-        hasMore = true;
-        break;
-      }
-
-      let parsedPayload: Record<string, unknown> = {};
-      try {
-        const raw: unknown = JSON.parse(row.payload);
-        if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
-          parsedPayload = raw as Record<string, unknown>;
-        }
-      } catch {
-        parsedPayload = {};
-      }
-
-      matched.push({
-        rowid: row.rowid,
-        submissionId: row.submission_id,
-        type: row.type,
-        roundId: row.round_id ?? "",
-        lookupId: row.lookup_id ?? "",
-        payload: parsedPayload,
-        receivedAt: row.received_at,
-      });
+    } catch {
+      // Payloads are validated JSON objects at submit time; an unreadable one is passed on empty
+      // so the host can report it instead of the whole inbox stalling.
+      parsedPayload = {};
     }
-
-    if (hasMore || rows.length < INBOX_SCAN_BATCH) {
-      break;
-    }
+    matched.push({
+      rowid: row.rowid,
+      submissionId: row.submission_id,
+      type: row.type,
+      roundId: row.round_id ?? "",
+      lookupId: row.lookup_id ?? "",
+      payload: parsedPayload,
+      receivedAt: row.received_at,
+    });
   }
 
-  const next = hasMore && matched.length > 0 ? matched[matched.length - 1].rowid : null;
+  const lastMatched = matched.length > 0 ? matched[matched.length - 1].rowid : null;
+  const next = hasMore ? lastMatched : null;
+  const scanned = hasMore && lastMatched !== null ? lastMatched : hi;
   const page: InboxPage = {
     schema: SCHEMA_VERSION,
     items: matched,
     next,
+    scanned,
   };
 
   const nowMs = now();
@@ -297,6 +291,10 @@ export async function handleHostAck(
   );
   if (cached) {
     return cached;
+  }
+
+  if (isClosedStatus(auth.tournament.status)) {
+    return errorResponse("ROUND_CLOSED", "Tournament is closed");
   }
 
   const bodyResult = await readJsonBody(request);
@@ -359,6 +357,10 @@ export async function handleHostHead(
   );
   if (cached) {
     return cached;
+  }
+
+  if (isClosedStatus(auth.tournament.status)) {
+    return errorResponse("ROUND_CLOSED", "Tournament is closed");
   }
 
   const bodyResult = await readJsonBody(request);
@@ -471,30 +473,31 @@ export async function handleHostClose(
     return cached;
   }
 
-  const alreadyClosed =
-    auth.tournament.status === "closed" || auth.tournament.status === "archived";
+  const alreadyClosed = isClosedStatus(auth.tournament.status);
 
   if (!alreadyClosed) {
+    const closedAt = new Date(nowMs).toISOString();
     await env.DB.prepare(
       `UPDATE tournaments
-       SET status = 'closed'
-       WHERE slug = ? AND status NOT IN ('closed', 'archived')`,
+       SET status = 'closed', closed_at = COALESCE(closed_at, ?)
+       WHERE slug = ? AND status NOT IN ('closed', 'archiving', 'archived')`,
     )
-      .bind(auth.tournament.slug)
+      .bind(closedAt, auth.tournament.slug)
       .run();
   }
 
-  const finalStatus =
-    auth.tournament.status === "archived" ? "archived" : "closed";
+  const finalStatus = alreadyClosed ? auth.tournament.status : "closed";
 
-  const day = utcDay(nowMs);
-  recordUsage(
-    auth.tournament.slug,
-    day,
-    { requests: 1, writes: (alreadyClosed ? 0 : 1) + (auth.hostUpdated ? 1 : 0) },
-    nowMs,
-  );
-  maybeFlushUsage(env.DB, auth.tournament.slug, day, nowMs, ctx);
+  if (!alreadyClosed) {
+    const day = utcDay(nowMs);
+    recordUsage(
+      auth.tournament.slug,
+      day,
+      { requests: 1, writes: 1 + (auth.hostUpdated ? 1 : 0) },
+      nowMs,
+    );
+    maybeFlushUsage(env.DB, auth.tournament.slug, day, nowMs, ctx);
+  }
 
   const response = jsonResponse(
     {

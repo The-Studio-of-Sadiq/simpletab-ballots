@@ -68,11 +68,19 @@ Row write counts include D1 index row updates (as specified in design section 13
 | `POST /v1/submit` | 2 (0 on duplicate) | 1 `submissions` row + 1 `submission_id` unique index row; no `(slug, rowid)` index |
 | `GET /v1/status` | 0 | Read-only; updates only in-memory request counters |
 | `POST /v1/host/ack` | 1 (0 if not greater) | Updates `tournaments.acked_through` |
-| `POST /v1/host/permits` | 1 per round | Upserts 1 row in `permits` |
-| `POST /v1/host/head` | 1 (0 on idempotent repeat) | Inserts 1 row in `heads` |
+| `POST /v1/host/permits` | 2 on first upload of a round, 1 after | Upserts 1 row in `permits` (+ its primary-key index on insert) |
+| `POST /v1/host/head` | 2 (0 on idempotent repeat) | Inserts 1 row in `heads` + its primary-key index |
 | `POST /v1/host/close` | 1 (0 if already closed) | Sets `tournaments.status = 'closed'` |
 | `POST /v1/host/key-request` | 1 | Inserts 1 row in `key_requests` |
 | `POST /v1/register` | 0 (stubbed 404) | Deferred to M10 (2 writes when implemented) |
-| Usage flush | 1 per tournament per isolate-minute | Additive `UPSERT` (`requests = requests + ?`), flushed at most once every 60 s |
+| Usage flush | 1 per tournament per isolate-minute (2 for the first of a day) | Additive `UPSERT` (`requests = requests + ?`), flushed at most once every 60 s |
 
 Note: `tournaments` includes `host_rank INTEGER` (per design section 4 step 8) alongside `host_number` and `host_id` so rank tie-breaking requires zero extra rows or indexes. Updating host metadata on a host-number/host-id change writes 1 row (`tournaments`).
+
+### Free-tier budget
+
+`npm run budget` replays a full WUDC-size day and a 100-team day against the real Worker in Miniflare, counts requests and D1 rows written and read, and fails above 90% of the free limits. It is not part of `npm test` (it takes a few minutes). Results and assumptions: [docs/free-tier-budget.md](docs/free-tier-budget.md).
+
+### Archive of closed tournaments
+
+A cron runs every 10 minutes (`src/lib/archive.ts`). Each run does one small step for one tournament, because a cron run on the free plan gets only 10 ms of CPU: once a tournament has been closed for an hour it is exported to R2 in parts of at most 200 rows / 128 KB (`archive/<slug>/part-NNNNN.ndjson.gz`, SHA-256 checked by R2), a manifest is written (`archive/<slug>.v1.manifest.json`) and verified against D1, the tournament becomes `archived`, and only then are its rows removed from D1, at most 5,000 rows a day. Nothing is ever deleted from R2, and the `tournaments` row stays. Errors stop the job and show on the admin page.

@@ -1,4 +1,5 @@
 import type { Clock, Env } from "./env";
+import { runArchiveTick } from "./lib/archive";
 import { errorResponse } from "./lib/errors";
 import { handleAdmin } from "./routes/admin";
 import {
@@ -85,11 +86,12 @@ export default {
   },
 
   async scheduled(
-    _controller: ScheduledController,
-    _env: Env,
-    _ctx: ExecutionContext,
+    controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
   ): Promise<void> {
-    // TODO(M3 step d): Archive closed tournaments from D1 to R2
-    // (closed -> archiving -> archived, verify counts + SHA-256, delete D1 rows in 500-row batches).
+    const work = runArchiveTick(env, controller.scheduledTime).then(() => undefined);
+    ctx.waitUntil(work);
+    await work;
   },
 } satisfies ExportedHandler<Env>;

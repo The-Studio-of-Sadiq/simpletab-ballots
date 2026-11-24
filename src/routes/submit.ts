@@ -7,7 +7,7 @@ import {
 } from "@simpletab/core/crypto";
 import { parseSubmission, type PermitForm } from "@simpletab/core/wire";
 import type { Clock, Env } from "../env";
-import type { TournamentRow } from "../lib/auth";
+import { isClosedStatus, type TournamentRow } from "../lib/auth";
 import { errorResponse, jsonResponse, readJsonBody, wireParseErrorResponse } from "../lib/errors";
 import { loadRoundPermit } from "../lib/permits";
 import {
@@ -68,7 +68,7 @@ export async function handleSubmit(
   const tournament = await env.DB.prepare(
     `SELECT slug, key_hash, host_number, host_id, host_rank, status,
             share_requests, share_writes, cdn_origin, acked_through,
-            reg_open, reg_close, reg_cap, created_at
+            reg_open, reg_close, reg_cap, closed_at, created_at
      FROM tournaments
      WHERE slug = ?`,
   )
@@ -93,7 +93,7 @@ export async function handleSubmit(
     });
   }
 
-  if (tournament.status === "closed" || tournament.status === "archived") {
+  if (isClosedStatus(tournament.status)) {
     return errorResponse("ROUND_CLOSED", "Tournament is closed");
   }
 

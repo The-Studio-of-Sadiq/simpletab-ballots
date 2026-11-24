@@ -36,7 +36,7 @@ export function defaultShares(participants: number): {
   shareWrites: number;
 } {
   return {
-    shareRequests: 1_000 + 12 * participants,
+    shareRequests: 2_000 + 12 * participants,
     shareWrites: 1_000 + 18 * participants,
   };
 }

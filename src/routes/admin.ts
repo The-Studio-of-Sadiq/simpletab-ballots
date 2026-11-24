@@ -1,6 +1,13 @@
 import { base64UrlEncode } from "@simpletab/core/crypto";
 import type { Clock, Env } from "../env";
-import { authenticateAdmin, hashTournamentKey, type TournamentRow } from "../lib/auth";
+import { DEFAULT_MAX_DELETES_PER_DAY } from "../lib/archive";
+import {
+  authenticateAdmin,
+  hashTournamentKey,
+  isClosedStatus,
+  type TournamentRow,
+  type TournamentStatus,
+} from "../lib/auth";
 import { errorResponse, jsonResponse, readJsonBody } from "../lib/errors";
 import {
   BLOCK_THRESHOLD,
@@ -32,6 +39,24 @@ interface UsageRow {
   requests: number;
   writes: number;
   reg_writes: number;
+}
+
+interface AdminArchiveJobRow {
+  slug: string;
+  phase: string;
+  table_idx: number;
+  next_part: number;
+  deleted_day: string | null;
+  deleted_today: number;
+  error: string | null;
+  updated_at: string;
+}
+
+interface AdminArchiveRecordRow {
+  slug: string;
+  r2_key: string;
+  rows: number;
+  archived_at: string;
 }
 
 type ThresholdLevel = "ok" | "warning" | "blocked";
@@ -330,12 +355,12 @@ async function reissueTournamentKey(env: Env, slug: string): Promise<Response> {
      WHERE slug = ?`,
   )
     .bind(slug)
-    .first<{ slug: string; host_number: number; status: string }>();
+    .first<{ slug: string; host_number: number; status: TournamentStatus }>();
 
   if (!existing) {
     return errorResponse("NOT_FOUND", "Tournament not found");
   }
-  if (existing.status === "closed" || existing.status === "archived") {
+  if (isClosedStatus(existing.status)) {
     return errorResponse("ROUND_CLOSED", "Cannot reissue key for a closed tournament");
   }
 
@@ -374,7 +399,7 @@ async function updateTournamentShare(
   const existing = await env.DB.prepare(
     `SELECT slug, key_hash, host_number, host_id, host_rank, status,
             share_requests, share_writes, cdn_origin, acked_through,
-            reg_open, reg_close, reg_cap, created_at
+            reg_open, reg_close, reg_cap, closed_at, created_at
      FROM tournaments
      WHERE slug = ?`,
   )
@@ -456,29 +481,40 @@ async function updateTournamentShare(
 async function getUsageReport(env: Env, url: URL, now: Clock): Promise<Response> {
   const day = url.searchParams.get("day")?.trim() || utcDay(now());
 
-  const [tournamentsRes, usageRes, d1Bytes, r2Bytes] = await Promise.all([
-    env.DB.prepare(
-      `SELECT slug, status, share_requests, share_writes, host_number, acked_through
-       FROM tournaments
-       ORDER BY created_at DESC`,
-    ).all<{
-      slug: string;
-      status: string;
-      share_requests: number;
-      share_writes: number;
-      host_number: number;
-      acked_through: number;
-    }>(),
-    env.DB.prepare(
-      `SELECT slug, day, requests, writes, reg_writes
-       FROM usage
-       WHERE day = ?`,
-    )
-      .bind(day)
-      .all<UsageRow>(),
-    getD1UsedBytes(env.DB),
-    getR2UsedBytes(env.ARCHIVE),
-  ]);
+  const [tournamentsRes, usageRes, archiveJobsRes, archivesRes, d1Bytes, r2Bytes] =
+    await Promise.all([
+      env.DB.prepare(
+        `SELECT slug, status, share_requests, share_writes, host_number, acked_through, closed_at
+         FROM tournaments
+         ORDER BY created_at DESC`,
+      ).all<{
+        slug: string;
+        status: string;
+        share_requests: number;
+        share_writes: number;
+        host_number: number;
+        acked_through: number;
+        closed_at: string | null;
+      }>(),
+      env.DB.prepare(
+        `SELECT slug, day, requests, writes, reg_writes
+         FROM usage
+         WHERE day = ?`,
+      )
+        .bind(day)
+        .all<UsageRow>(),
+      env.DB.prepare(
+        `SELECT slug, phase, table_idx, next_part, deleted_day, deleted_today, error, updated_at
+         FROM archive_jobs
+         ORDER BY updated_at DESC`,
+      ).all<AdminArchiveJobRow>(),
+      env.DB.prepare(
+        `SELECT slug, r2_key, rows, archived_at
+         FROM archives`,
+      ).all<AdminArchiveRecordRow>(),
+      getD1UsedBytes(env.DB),
+      getR2UsedBytes(env.ARCHIVE),
+    ]);
 
   const usageBySlug = new Map<string, { requests: number; writes: number; regWrites: number }>();
   for (const row of usageRes.results) {
@@ -508,12 +544,28 @@ async function getUsageReport(env: Env, url: URL, now: Clock): Promise<Response>
     totalRegWrites += entry.regWrites;
   }
 
+  const jobsBySlug = new Map<string, AdminArchiveJobRow>();
+  let deletedToday = 0;
+  for (const job of archiveJobsRes.results) {
+    jobsBySlug.set(job.slug, job);
+    if (job.deleted_day === day) {
+      deletedToday += job.deleted_today;
+    }
+  }
+
+  const archivesBySlug = new Map<string, AdminArchiveRecordRow>();
+  for (const arch of archivesRes.results) {
+    archivesBySlug.set(arch.slug, arch);
+  }
+
   let allocatedWrites = 0;
   const tournaments = tournamentsRes.results.map((t) => {
     if (t.status === "active" || t.status === "paused") {
       allocatedWrites += t.share_writes;
     }
     const used = usageBySlug.get(t.slug) ?? { requests: 0, writes: 0, regWrites: 0 };
+    const job = jobsBySlug.get(t.slug);
+    const arch = archivesBySlug.get(t.slug);
     return {
       slug: t.slug,
       status: t.status,
@@ -524,8 +576,27 @@ async function getUsageReport(env: Env, url: URL, now: Clock): Promise<Response>
       requests: used.requests,
       writes: used.writes,
       regWrites: used.regWrites,
+      archive: {
+        closedAt: t.closed_at,
+        phase: job?.phase ?? null,
+        error: job?.error ?? null,
+        r2Key: arch?.r2_key ?? null,
+        archivedRows: arch?.rows ?? null,
+        archivedAt: arch?.archived_at ?? null,
+      },
     };
   });
+
+  const erroredJobs = archiveJobsRes.results
+    .filter((job) => job.error !== null)
+    .map((job) => ({
+      slug: job.slug,
+      phase: job.phase,
+      tableIdx: job.table_idx,
+      nextPart: job.next_part,
+      error: job.error,
+      updatedAt: job.updated_at,
+    }));
 
   return jsonResponse(
     {
@@ -563,6 +634,11 @@ async function getUsageReport(env: Env, url: URL, now: Clock): Promise<Response>
           limitBytes: R2_LIMIT_BYTES,
           level: thresholdLevel(r2Bytes, R2_LIMIT_BYTES),
         },
+      },
+      archive: {
+        deletedToday,
+        dailyDeleteLimit: DEFAULT_MAX_DELETES_PER_DAY,
+        erroredJobs,
       },
       tournaments,
     },

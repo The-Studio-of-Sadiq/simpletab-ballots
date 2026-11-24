@@ -5,7 +5,12 @@ import {
   type StatusResponse,
 } from "@simpletab/core/wire";
 import type { Clock, Env } from "../env";
-import { extractBearerToken, hashTournamentKey, type TournamentRow } from "../lib/auth";
+import {
+  extractBearerToken,
+  hashTournamentKey,
+  isClosedStatus,
+  type TournamentRow,
+} from "../lib/auth";
 import { errorResponse, jsonResponse } from "../lib/errors";
 import { checkRateLimit, getEffectiveUsage, recordUsage, utcDay } from "../lib/usage";
 
@@ -81,7 +86,7 @@ export async function handleStatus(
   const tournament = await env.DB.prepare(
     `SELECT slug, key_hash, host_number, host_id, host_rank, status,
             share_requests, share_writes, cdn_origin, acked_through,
-            reg_open, reg_close, reg_cap, created_at
+            reg_open, reg_close, reg_cap, closed_at, created_at
      FROM tournaments
      WHERE slug = ?`,
   )
@@ -90,6 +95,10 @@ export async function handleStatus(
 
   if (!tournament || tournament.status === "pending") {
     return errorResponse("NOT_FOUND", "Tournament not found");
+  }
+
+  if (isClosedStatus(tournament.status)) {
+    return errorResponse("ROUND_CLOSED", "Tournament is closed");
   }
 
   let isHost = false;

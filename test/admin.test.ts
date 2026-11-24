@@ -74,7 +74,7 @@ describe("Admin routes, Access protection, key lifecycle, shares, and usage repo
       shareWrites: number;
       hostNumber: number;
     };
-    expect(approved.shareRequests).toBe(11800);
+    expect(approved.shareRequests).toBe(12800);
     expect(approved.shareWrites).toBe(17200);
     expect(approved.hostNumber).toBe(1);
 
