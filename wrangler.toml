@@ -1,0 +1,36 @@
+name = "simpletab-ballots"
+main = "src/worker.ts"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "simpletab-ballots"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "ARCHIVE"
+bucket_name = "simpletab-ballots-archive"
+
+[[ratelimits]]
+name = "RL_LINK"
+namespace_id = "1001"
+
+[ratelimits.simple]
+limit = 10
+period = 60
+
+[[ratelimits]]
+name = "RL_IP"
+namespace_id = "1002"
+
+[ratelimits.simple]
+limit = 20
+period = 60
+
+[triggers]
+crons = ["0 3 * * *"]
+
+[alias]
+"@" = "../simpletab/packages/core/src"
+"@simpletab/core" = "../simpletab/packages/core/src"
