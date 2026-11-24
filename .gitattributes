@@ -1,0 +1,2 @@
+# Keep LF line endings everywhere so fixtures and hashes match on Windows and Linux.
+* text=auto eol=lf
