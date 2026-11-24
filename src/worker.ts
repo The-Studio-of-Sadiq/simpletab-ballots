@@ -10,6 +10,7 @@ import {
   handleHostKeyRequest,
   handleHostPermits,
 } from "./routes/host";
+import { handlePublicHeads } from "./routes/heads";
 import { handleStatus } from "./routes/status";
 import { handleSubmit } from "./routes/submit";
 
@@ -48,6 +49,9 @@ export async function handleRequest(
     }
     if (method === "POST" && pathname === "/v1/submit") {
       return await handleSubmit(request, env, ctx, now);
+    }
+    if (method === "GET" && pathname.startsWith("/v1/heads/")) {
+      return await handlePublicHeads(env, url, now);
     }
     if (method === "GET" && pathname === "/v1/status") {
       return await handleStatus(request, env, url, now);
